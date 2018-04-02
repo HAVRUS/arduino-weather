@@ -1,20 +1,26 @@
-/* MH-Real-Time Clock Module 2 (DS1302):
+/* MH-Real-Time Clock Module 2 DS1302:
     VCC = 5V
     GND = GND
     CLK = D2
     DAT = D3
     RST = D4
 
-   LCD1602 I2C:
+   LCD1602 (I2C):
    VCC = 5V
    GND = GND
    SDA = A4
    SCL = A5
 
-   dht11:
+   DHT11:
    PLUS = 5V
    OUT = D8
    GND = GND
+
+   BMP280 (I2C):
+   VCC = 3.3v
+   GND = GND
+   SCL = A5
+   SDA = A4
 */
 
 #include <stdio.h>
@@ -23,16 +29,18 @@
 
 #include <DS1302.h>
 #include <dht11.h>
+#include <iarduino_Pressure_BMP.h>
 #include <LCD_1602_RUS.h>
 
 #define RST_PIN 4
 #define DAT_PIN 3
 #define CLK_PIN 2
-#define dht11_PIN 8 // dht11 на Digital Pin 8
+#define dht11_PIN 8
 
 DS1302 rtc(RST_PIN, DAT_PIN, CLK_PIN);
 dht11 dht;
-LCD_1602_RUS lcd(0x3f, 16, 2); // Задаем дисплей (адрес можно чекнуть через i2c_scanner)
+iarduino_Pressure_BMP bmp(0x76); // Адрес можно чекнуть через i2c_scanner
+LCD_1602_RUS lcd(0x3f, 16, 2); // Задаем дисплей
 
 char buf_full[50]; // Стандартный формат
 char buf_day[17]; // Только дата
@@ -71,7 +79,8 @@ String dayAsString(const Time::Day day)
 */
 
 int count;
-int count2;
+long count2;
+bool count3;
 
 byte updatedC[8] = // Массив для символа обновления показаний (*)
 {
@@ -92,9 +101,12 @@ void setup()
   rtc.writeProtect(false);
   rtc.halt(false);
   /*
-  Time t(2018, 4, 01, 15, 9, 20, Time::kSunday); // ГГГГ, М, ДД, ЧЧ, ММ, СС, ДЕНЬ НЕДЕЛИ
+  Time t(2018, 4, 01, 22, 42, 0, Time::kSunday); // ГГГГ, М, ДД, ЧЧ, ММ, СС, ДЕНЬ НЕДЕЛИ
   rtc.time(t); // Установить дату и время
   */
+  
+  bmp.begin();
+  
   lcd.init();
   lcd.backlight(); // Включаем подсветку дисплея
   lcd.createChar(1, updatedC); // Создаем символ обновления показаний
@@ -117,11 +129,24 @@ void printTime()
            t.hr, t.min, t.sec);
 }
 
-void loop()
+void checkStatus()
 {
-  printTime();
-  
-  // Проверяем состояние DHT11
+  if (count3 == false)
+  {
+    lcd.setCursor(15, 0); // Устанавливаем курсор на вторую строку и 15-й символ.
+    lcd.print(char(1)); // Выводим на экран *
+    count3 = true;
+  }
+  else
+  {
+    lcd.setCursor(15, 0); // Устанавливаем курсор на вторую строку и 15-й символ.
+    lcd.print(" "); // Удаляем с экрана *
+    count3 = false;
+  }
+}
+
+void checkSensors()
+{
   int chk;
   chk = dht.read(dht11_PIN);
   switch (chk)
@@ -129,21 +154,64 @@ void loop()
     case DHTLIB_OK:
       break;
     case DHTLIB_ERROR_CHECKSUM:
-      Serial.println("dht11: Checksum error, \t");
+      Serial.println("DHT11: Checksum error, \t");
       break;
     case DHTLIB_ERROR_TIMEOUT:
-      Serial.println("dht11: Time out error, \t");
+      Serial.println("DHT11: Time out error, \t");
       break;
     default:
-      Serial.println("dht11: Unknown error, \t");
+      Serial.println("DHT11: Unknown error, \t");
       break;
   }
+  
+  if (bmp.read(1) == 0)                             
+  {
+    Serial.println("BMP280: Connection error, \t");
+  }
+}
+
+void sendData()
+{
+  if (count2 % 600 == 1) // Передаем данные через последовательный порт каждые 10 минут
+  {
+    Serial.println(buf_full);
+    Serial.print("Temp: ");
+    Serial.print(dht.temperature);
+    Serial.print(" C");
+    Serial.print(" Humidity: ");
+    Serial.print(dht.humidity);
+    Serial.print("%");
+    Serial.print(" Pressure: ");
+    Serial.print(bmp.pressure);
+    Serial.println(" mm Hg");
+    Serial.print("Count 1: ");
+    Serial.print(count);
+    Serial.print(" Count 2: ");
+    Serial.print(count2);
+    Serial.println(" ");
+  }
+}
+
+void loop()
+{
+  printTime();
+  checkSensors();
+  checkStatus();
 
   int temperature_res = dht.temperature;
   int humidity_res = dht.humidity;
+  int pressure_res = (int)bmp.pressure;
+  
   count2 = (millis() / 1000);
-
-  if ((count >= 10) && (count <= 19))
+  if ((count >= 20) && (count <= 29))
+  {
+    lcd.setCursor(11, 1); // Устанавливаем курсор на вторую строку и 11-й символ.
+    lcd.print(pressure_res);
+    lcd.setCursor(14, 1); // Устанавливаем курсор на вторую строку и 13-й символ.
+    lcd.print("mm");
+    count++;
+  }
+  else if ((count >= 10) && (count <= 19))
   {
     lcd.setCursor(11, 1); // Устанавливаем курсор на вторую строку и 11-й символ.
     lcd.print(temperature_res);
@@ -164,33 +232,12 @@ void loop()
     count = 0;
   }
 
-  if (count2 % 2 == 1)
-  {
-    lcd.setCursor(15, 0); // Устанавливаем курсор на вторую строку и 15-й символ.
-    lcd.print(char(1)); // Выводим на экран *
-  }
-  else
-  {
-    lcd.setCursor(15, 0); // Устанавливаем курсор на вторую строку и 15-й символ.
-    lcd.print(" "); // Удаляем с экрана *
-  }
-
   lcd.setCursor(0, 0); // Устанавливаем курсор на вторую строку и 0-й символ.
   lcd.print(buf_day); // Выводим на экран дату
   lcd.setCursor(0, 1); // Устанавливаем курсор на вторую строку и 0-й символ.
   lcd.print(buf_time); // Выводим на экран время
-
-  // Передаем данные через последовательный порт каждые 10 минут
-  if (count2 % 600 == 1)
-  {
-    Serial.println(buf_full);
-    Serial.print("Temp: ");
-    Serial.print(dht.temperature);
-    Serial.print(" C");
-    Serial.print(" Humidity: ");
-    Serial.print(dht.humidity);
-    Serial.println("%");
-    Serial.println(" ");
-  }
+  
+  sendData();
+  
   delay(925); // Задержка с калибровкой
 }
